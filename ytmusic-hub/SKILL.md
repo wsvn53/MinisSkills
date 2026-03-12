@@ -1,57 +1,57 @@
 ---
 name: ytmusic-hub
-description: 使用 Python + ytmusicapi 读写 YouTube Music 数据的技能，通过 browser_use get_cookies 自动获取 Cookie 完成认证，无需手动复制。支持获取歌单列表、收藏歌曲、歌单详情，创建/编辑/删除歌单，搜索歌曲并添加到歌单，获取推荐、图表、歌词等。当用户提到"YouTube Music"、"YT Music"、"ytmusic"、"ytmusic-hub"、"获取 YouTube 歌单"、"创建 YouTube Music 歌单"、"我的收藏歌曲"、"YTM 歌单"，或任何需要以编程方式读写 YouTube Music 数据的场景，必须触发本技能。
+description: Read and write YouTube Music data using Python + ytmusicapi, authenticated via browser cookies obtained automatically with browser_use get_cookies — no manual copying required. Supports fetching playlists, liked songs, playlist details, creating/editing/deleting playlists, searching and adding songs, recommendations, charts, and lyrics. Trigger this skill whenever the user mentions "YouTube Music", "YT Music", "ytmusic", "ytmusic-hub", "get YouTube playlists", "create YouTube Music playlist", "my liked songs", "YTM playlist", or any scenario requiring programmatic read/write access to YouTube Music data.
 ---
 
 # ytmusic-hub
 
-使用 `ytmusicapi` 库操作 YouTube Music，通过浏览器 Cookie 认证，支持歌单管理、搜索、收藏等全部功能。
+Interact with YouTube Music using the `ytmusicapi` library, authenticated via browser cookies. Supports full playlist management, search, liked songs, and more.
 
 ---
 
-## 环境准备
+## Setup
 
-### 安装依赖
+### Install dependency
 ```bash
 pip install ytmusicapi
 ```
 
-### 认证文件路径
+### Auth file path
 ```
 /var/minis/workspace/ytmusic_headers.json
 ```
 
 ---
 
-## 认证流程（每次使用前执行）
+## Authentication (run before first use or when cookies expire)
 
-认证分两步：**获取 Cookie** → **生成认证文件**。
+Two steps: **get cookies** → **generate auth file**.
 
-### Step 1：获取 Cookie
+### Step 1: Get cookies
 
-用 `browser_use` 打开 YouTube Music 并获取 Cookie：
+Navigate to YouTube Music and get cookies via `browser_use`:
 
-```python
-# browser_use navigate: https://music.youtube.com
-# browser_use get_cookies -> 保存到 env 文件
+```
+browser_use navigate: https://music.youtube.com
+browser_use get_cookies -> save env file path
 ```
 
-确认页面已登录（右上角显示头像/用户名），然后 `get_cookies` 获取全部 Cookie，记录 env 文件路径。
+Confirm the page is logged in (avatar visible in top-right), then call `get_cookies` and note the env file path.
 
-### Step 2：生成认证文件
+### Step 2: Generate auth file
 
-加载 env 文件后运行认证脚本：
+Load the env file and run the auth setup script:
 
 ```bash
 . /var/minis/offloads/env_cookies_youtube_com_xxx.sh
 python3 /var/minis/skills/ytmusic-hub/scripts/setup_auth.py
 ```
 
-脚本会自动从环境变量读取所有 Cookie，生成带 SAPISIDHASH 的认证文件到 `/var/minis/workspace/ytmusic_headers.json`。
+The script reads all Cookie env vars and writes a browser-auth file with SAPISIDHASH to `/var/minis/workspace/ytmusic_headers.json`.
 
-### Step 3：初始化 YTMusic 客户端
+### Step 3: Initialize YTMusic client
 
-使用统一初始化模块，自动处理 DNS 污染和 SSL 证书问题：
+Use the unified client module — it automatically handles DNS pollution and SSL issues:
 
 ```python
 import sys
@@ -61,166 +61,147 @@ from ytmusic_client import get_client
 yt = get_client()
 ```
 
-`get_client()` 会自动：
-1. patch urllib3 SSL context（绕过 iSH 证书问题）
-2. 检测本地 DNS 是否被污染
-3. 若污染，通过 Google DoH (`dns.google`) 查询真实 IP，patch socket 强制走正确 IP
-4. 返回可用的 YTMusic 实例，失败则抛出含原因的异常
+`get_client()` will automatically:
+1. Patch urllib3 to disable SSL certificate verification (required in iSH)
+2. Detect if local DNS is polluted
+3. If polluted, resolve the real IP via Google DoH and patch `socket.getaddrinfo`
+4. Return a ready-to-use YTMusic instance, or raise `RuntimeError` with a clear message
 
 ---
 
-## 功能 API 参考
+## API Reference
 
-### 📋 歌单管理
+### 📋 Playlist Management
 
 ```python
-# 获取我的所有歌单
+# Get all my playlists
 playlists = yt.get_library_playlists(limit=25)
-# 返回: [{playlistId, title, count, ...}, ...]
+# Returns: [{playlistId, title, count, ...}, ...]
 
-# 获取歌单详细内容（包含所有曲目）
+# Get playlist contents (all tracks)
 playlist = yt.get_playlist(playlistId, limit=100)
-# 返回: {title, description, trackCount, tracks: [{videoId, title, artists, ...}]}
+# Returns: {title, description, trackCount, tracks: [{videoId, title, artists, ...}]}
 
-# 创建新歌单
+# Create a new playlist
 playlistId = yt.create_playlist(
-    title="歌单名称",
-    description="歌单描述",
+    title="Playlist name",
+    description="Description",
     privacy_status="PRIVATE"  # PUBLIC / PRIVATE / UNLISTED
 )
 
-# 编辑歌单信息
-yt.edit_playlist(playlistId, title="新名称", description="新描述")
+# Edit playlist metadata
+yt.edit_playlist(playlistId, title="New name", description="New description")
 
-# 删除歌单
+# Delete a playlist
 yt.delete_playlist(playlistId)
 
-# 添加歌曲到歌单（videoId 列表）
+# Add songs to a playlist
 yt.add_playlist_items(playlistId, videoIds=["videoId1", "videoId2"])
 
-# 从歌单移除歌曲
-# 先获取 setVideoId（歌单内的唯一标识，不同于 videoId）
+# Remove songs from a playlist
+# setVideoId is the track's unique ID within the playlist (different from videoId)
 tracks = yt.get_playlist(playlistId)["tracks"]
 yt.remove_playlist_items(playlistId, tracks=[
     {"videoId": t["videoId"], "setVideoId": t["setVideoId"]}
-    for t in tracks if t["title"] == "目标歌曲"
+    for t in tracks if t["title"] == "Target song"
 ])
 ```
 
-### ❤️ 收藏与资料库
+### ❤️ Liked Songs & Library
 
 ```python
-# 获取收藏歌曲（Liked Songs）
+# Get liked songs
 liked = yt.get_liked_songs(limit=100)
 tracks = liked["tracks"]  # [{videoId, title, artists, album, ...}]
 
-# 获取资料库歌曲
-songs = yt.get_library_songs(limit=25)
-
-# 获取资料库专辑
-albums = yt.get_library_albums(limit=25)
-
-# 获取资料库艺术家
+# Get library songs / albums / artists
+songs   = yt.get_library_songs(limit=25)
+albums  = yt.get_library_albums(limit=25)
 artists = yt.get_library_artists(limit=25)
 
-# 点赞/取消点赞歌曲
-yt.rate_song(videoId, "LIKE")     # LIKE / DISLIKE / INDIFFERENT
+# Like / unlike a song
+yt.rate_song(videoId, "LIKE")   # LIKE / DISLIKE / INDIFFERENT
 ```
 
-### 🔍 搜索
+### 🔍 Search
 
 ```python
-# 搜索（返回混合结果）
-results = yt.search("周杰伦 夜曲")
+# General search (mixed results)
+results = yt.search("Jay Chou")
 
-# 按类型搜索
-songs   = yt.search("周杰伦", filter="songs")    # 歌曲
-videos  = yt.search("周杰伦", filter="videos")   # 视频
-albums  = yt.search("周杰伦", filter="albums")   # 专辑
-artists = yt.search("周杰伦", filter="artists")  # 艺术家
+# Filter by type
+songs   = yt.search("Jay Chou", filter="songs")
+videos  = yt.search("Jay Chou", filter="videos")
+albums  = yt.search("Jay Chou", filter="albums")
+artists = yt.search("Jay Chou", filter="artists")
 
-# 获取 videoId（用于添加到歌单）
+# Get videoId for adding to playlist
 videoId = songs[0]["videoId"]
 ```
 
-### 🎵 浏览与推荐
+### 🎵 Browse & Recommendations
 
 ```python
-# 首页推荐
+# Home feed
 home = yt.get_home()
 
-# 全球/地区排行榜
-charts = yt.get_charts(country="HK")  # TW / CN / US / JP 等
+# Charts (global or by country)
+charts = yt.get_charts(country="US")  # TW / HK / CN / JP / KR etc.
 
-# 心情歌单分类
+# Mood playlists
 moods = yt.get_mood_categories()
 mood_playlists = yt.get_mood_playlists(params=moods["Moods & moments"][0]["params"])
 
-# 获取歌词
-watchPlaylist = yt.get_watch_playlist(videoId="videoId")
-lyricsId = watchPlaylist.get("lyrics")
-if lyricsId:
-    lyrics = yt.get_lyrics(lyricsId)
+# Lyrics
+watch = yt.get_watch_playlist(videoId="videoId")
+lyrics_id = watch.get("lyrics")
+if lyrics_id:
+    lyrics = yt.get_lyrics(lyrics_id)
     print(lyrics["lyrics"])
 ```
 
-### 🎤 艺术家与专辑
+### 🎤 Artists & Albums
 
 ```python
-# 获取艺术家信息
 artist = yt.get_artist(channelId)
-
-# 获取专辑
-album = yt.get_album(browseId)
-
-# 获取用户主页
-user = yt.get_user(channelId)
+album  = yt.get_album(browseId)
+user   = yt.get_user(channelId)
 user_playlists = yt.get_user_playlists(channelId, params)
 ```
 
 ---
 
-## 常见工作流示例
+## Common Workflows
 
-### 工作流 A：搜索歌曲并加入指定歌单
+### Workflow A: Search and add a song to a playlist
 
 ```python
-# 1. 搜索
-results = yt.search("告五人 爱人错过", filter="songs")
+results = yt.search("Gao Wu Ren - Love Missed", filter="songs")
 videoId = results[0]["videoId"]
-title = results[0]["title"]
-print(f"找到: {title} ({videoId})")
 
-# 2. 获取歌单列表，让用户选择
 playlists = yt.get_library_playlists()
 for i, pl in enumerate(playlists):
     print(f"{i+1}. {pl['title']} [{pl['playlistId']}]")
 
-# 3. 添加
 yt.add_playlist_items(playlistId, videoIds=[videoId])
-print(f"✅ 已添加到歌单")
+print("✅ Added to playlist")
 ```
 
-### 工作流 B：创建新歌单并批量添加收藏歌曲
+### Workflow B: Create a playlist from liked songs
 
 ```python
-# 1. 创建歌单
-new_id = yt.create_playlist("我的精选", "从收藏中挑选", "PRIVATE")
-
-# 2. 获取收藏
-liked = yt.get_liked_songs(limit=50)
-video_ids = [t["videoId"] for t in liked["tracks"][:20]]
-
-# 3. 批量添加（每次最多50首）
-yt.add_playlist_items(new_id, videoIds=video_ids)
-print(f"✅ 已创建歌单并添加 {len(video_ids)} 首歌")
+new_id = yt.create_playlist("My Favorites", "Picked from liked songs", "PRIVATE")
+liked  = yt.get_liked_songs(limit=50)
+ids    = [t["videoId"] for t in liked["tracks"][:20]]
+yt.add_playlist_items(new_id, videoIds=ids)
+print(f"✅ Created playlist with {len(ids)} songs")
 ```
 
-### 工作流 C：导出歌单为 Markdown
+### Workflow C: Export a playlist as Markdown
 
 ```python
 playlist = yt.get_playlist(playlistId, limit=200)
-lines = [f"# {playlist['title']}", f"> {playlist.get('description','')}", ""]
+lines = [f"# {playlist['title']}", f"> {playlist.get('description', '')}", ""]
 for i, t in enumerate(playlist["tracks"], 1):
     artists = ", ".join(a["name"] for a in t.get("artists", []))
     lines.append(f"{i}. **{t['title']}** — {artists}")
@@ -229,10 +210,10 @@ print("\n".join(lines))
 
 ---
 
-## 注意事项
+## Notes
 
-- **Cookie 有效期**：通常数天到数周，失效后重新执行认证流程即可
-- **认证文件安全**：`ytmusic_headers.json` 包含登录凭据，不要分享
-- **API 限制**：ytmusicapi 是非官方库，大量操作可能触发 Google 风控，建议适量使用
-- **网络要求**：需要能访问 `music.youtube.com`（需代理），iSH 的 SSL patch 已内置在初始化模板中
-- **videoId vs setVideoId**：从歌单移除歌曲时必须用 `setVideoId`（歌曲在该歌单内的唯一 ID），不能用 `videoId`
+- **Cookie expiry**: Cookies typically last days to weeks. Re-run the auth flow when they expire.
+- **Auth file security**: `ytmusic_headers.json` contains login credentials — do not share it.
+- **Rate limits**: ytmusicapi is unofficial. Avoid bulk operations that may trigger Google's rate limiting.
+- **Network**: Requires access to `music.youtube.com`. The client module handles DNS pollution and SSL issues automatically.
+- **videoId vs setVideoId**: When removing tracks from a playlist, you must use `setVideoId` (the track's position-specific ID), not `videoId`.

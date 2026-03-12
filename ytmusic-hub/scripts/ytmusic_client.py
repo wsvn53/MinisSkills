@@ -1,8 +1,12 @@
 """
 ytmusic_client.py
-ytmusic-hub 的统一初始化模块。
+Unified YTMusic client initializer for ytmusic-hub.
 
-用法：
+Handles two common issues in the iSH environment automatically:
+  1. SSL certificate verification errors — patches urllib3 to disable cert checks
+  2. DNS pollution for *.youtube.com — falls back to Google DoH and patches socket
+
+Usage:
     import sys
     sys.path.insert(0, "/var/minis/skills/ytmusic-hub/scripts")
     from ytmusic_client import get_client
@@ -19,21 +23,22 @@ AUTH_FILE = "/var/minis/workspace/ytmusic_headers.json"
 TARGET_HOST = "music.youtube.com"
 DOH_URL = "https://dns.google/resolve?name={}&type=A"
 
-# ── SSL patch：在模块加载时立即执行，只执行一次 ─────────────────────────────
+
+# ── SSL patch: applied at import time, runs only once ───────────────────────
 
 def _patch_ssl_once():
     """
-    patch urllib3 两处，彻底禁用证书验证：
-    1. create_urllib3_context：禁用新建 context 的验证
-    2. _ssl_wrap_socket_and_match_hostname：跳过 hostname 匹配
+    Disable SSL certificate verification in urllib3 at two levels:
+      1. create_urllib3_context: new contexts skip cert validation
+      2. _ssl_wrap_socket_and_match_hostname: skip hostname matching
     """
     from urllib3.util import ssl_ as u3ssl
     import urllib3.connection as u3conn
 
     if getattr(u3ssl, "_ytmusic_patched", False):
-        return  # 防止重复 patch
+        return  # already patched
 
-    # patch 1: 新建 context 时禁用验证
+    # Patch 1: disable cert verification in new SSL contexts
     _orig_ctx = u3ssl.create_urllib3_context
     def _patched_ctx(*a, **kw):
         ctx = _orig_ctx(*a, **kw)
@@ -42,7 +47,7 @@ def _patch_ssl_once():
         return ctx
     u3ssl.create_urllib3_context = _patched_ctx
 
-    # patch 2: 跳过 hostname 匹配（覆盖调用方传入的 cert_reqs）
+    # Patch 2: skip hostname matching after handshake
     _orig_wrap = u3conn._ssl_wrap_socket_and_match_hostname
     def _patched_wrap(*a, **kw):
         kw["cert_reqs"] = ssl.CERT_NONE
@@ -54,12 +59,14 @@ def _patch_ssl_once():
     urllib3.disable_warnings()
     u3ssl._ytmusic_patched = True
 
+
 _patch_ssl_once()
 
-# ── 工具函数 ────────────────────────────────────────────────────────────────
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _ssl_reachable(host, ip=None):
-    """测试 SSL 连通性，不验证证书，可指定直连 IP。"""
+    """Check SSL connectivity. Optionally connect via a specific IP."""
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -73,7 +80,7 @@ def _ssl_reachable(host, ip=None):
 
 
 def _doh_resolve(hostname):
-    """通过 Google DoH 查询真实 IP，绕过本地 DNS 污染。"""
+    """Resolve hostname via Google DoH, bypassing local DNS pollution."""
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -87,11 +94,11 @@ def _doh_resolve(hostname):
     return ips[0] if ips else None
 
 
-# 记录已 patch 的 hostname，避免重复叠加
-_dns_patched = set()
+# Track patched hostnames to avoid stacking wrappers
+_dns_patched: set = set()
 
 def _patch_dns(hostname, ip):
-    """patch socket.getaddrinfo，强制将 hostname 解析到指定 IP（幂等）。"""
+    """Force hostname to resolve to a specific IP via socket.getaddrinfo (idempotent)."""
     if hostname in _dns_patched:
         return
     _orig = socket.getaddrinfo
@@ -104,32 +111,33 @@ def _patch_dns(hostname, ip):
     print(f"  DNS patch: {hostname} -> {ip}")
 
 
-# ── 主入口 ──────────────────────────────────────────────────────────────────
+# ── Main entry point ─────────────────────────────────────────────────────────
 
 def get_client(auth_file=AUTH_FILE):
     """
-    返回可用的 YTMusic 实例，自动处理 DNS 污染和 SSL 问题。
-    若网络不可用则抛出 RuntimeError。
+    Return a ready-to-use YTMusic instance.
+    Automatically resolves DNS pollution and SSL issues.
+    Raises RuntimeError if the network is unreachable.
     """
-    print(f"🔌 正在连接 {TARGET_HOST}...")
+    print(f"🔌 Connecting to {TARGET_HOST}...")
 
     if _ssl_reachable(TARGET_HOST):
-        print(f"  ✅ 本地 DNS 正常，直接连接")
+        print(f"  ✅ Local DNS OK, connecting directly")
     else:
-        print(f"  ⚠️  本地 DNS 被污染，通过 DoH 查询真实 IP...")
+        print(f"  ⚠️  Local DNS polluted, resolving via DoH...")
         try:
             real_ip = _doh_resolve(TARGET_HOST)
             if not real_ip:
-                raise RuntimeError("DoH 未返回有效 IP")
-            print(f"  DoH 解析: {TARGET_HOST} -> {real_ip}")
+                raise RuntimeError("DoH returned no valid IP")
+            print(f"  DoH resolved: {TARGET_HOST} -> {real_ip}")
             if not _ssl_reachable(TARGET_HOST, ip=real_ip):
-                raise RuntimeError(f"IP {real_ip} 也无法连接，请检查代理是否开启")
+                raise RuntimeError(f"IP {real_ip} is also unreachable. Check your proxy/VPN.")
             _patch_dns(TARGET_HOST, real_ip)
             _patch_dns("youtubei.googleapis.com", _doh_resolve("youtubei.googleapis.com") or real_ip)
         except Exception as e:
-            raise RuntimeError(f"❌ 网络不可用: {e}\n请确认代理/VPN 已开启") from e
+            raise RuntimeError(f"❌ Network unavailable: {e}\nPlease enable your proxy/VPN.") from e
 
     from ytmusicapi import YTMusic
     yt = YTMusic(auth_file)
-    print(f"  ✅ YTMusic 已就绪\n")
+    print(f"  ✅ YTMusic ready\n")
     return yt

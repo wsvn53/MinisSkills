@@ -1,13 +1,16 @@
 """
 setup_auth.py
-从环境变量（由 browser_use get_cookies 导出）生成 ytmusicapi Browser 认证文件。
+Generate ytmusicapi Browser auth file from environment variables
+exported by browser_use get_cookies.
 
-用法：
+Usage:
     . /var/minis/offloads/env_cookies_youtube_com_xxx.sh
     python3 /var/minis/skills/ytmusic-hub/scripts/setup_auth.py
 """
 
-import os, hashlib, time
+import os
+import hashlib
+import time
 from ytmusicapi import setup
 
 AUTH_FILE = "/var/minis/workspace/ytmusic_headers.json"
@@ -37,13 +40,14 @@ COOKIE_KEYS = [
     ("__Secure-ROLLOUT_TOKEN",   "COOKIE___SECURE_ROLLOUT_TOKEN"),
 ]
 
+
 def setup_auth(auth_file=AUTH_FILE):
     cookie_str = "; ".join(
         f"{k}={os.environ[env]}"
         for k, env in COOKIE_KEYS if os.environ.get(env)
     )
     if not cookie_str:
-        raise RuntimeError("未找到 Cookie 环境变量，请先加载 env 文件")
+        raise RuntimeError("No Cookie env vars found. Please load the env file first.")
 
     sapisid = os.environ.get("COOKIE_SAPISID", "")
     ts = str(int(time.time()))
@@ -58,7 +62,8 @@ def setup_auth(auth_file=AUTH_FILE):
             "x-origin: https://music.youtube.com",
         ])
     )
-    print(f"✅ 认证文件已生成: {auth_file}")
+    print(f"✅ Auth file written: {auth_file}")
+
 
 if __name__ == "__main__":
     setup_auth()
